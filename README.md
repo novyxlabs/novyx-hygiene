@@ -95,15 +95,13 @@ Paste this into your Claude/Codex session to continue.
 pip install novyx-hygiene
 ```
 
-Set your Novyx API key:
+**Works out of the box** — no API key required for local mode. Sessions are saved to `~/.novyx_hygiene/sessions/`.
+
+**Optional:** Set your Novyx API key for cloud persistence, semantic search, and cross-machine sync:
 
 ```bash
 export NOVYX_API_KEY="nram_your_key_here"
-```
-
-Or use the config command:
-
-```bash
+# or
 hygiene config set api_key nram_your_key_here
 ```
 
