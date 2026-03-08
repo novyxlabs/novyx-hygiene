@@ -28,14 +28,15 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 
 # Tags for session memories
 SESSION_TAG = "hygiene-session"
-DECISION_TAG = "hygiene-decision"
+
+# Keep reference to built-in list before it's shadowed by our command
+_list = list
 
 
 def get_config() -> Dict[str, str]:
     """Load config from file or env."""
     config = {}
     
-    # Load from file if exists
     if CONFIG_FILE.exists():
         try:
             with open(CONFIG_FILE) as f:
@@ -43,7 +44,6 @@ def get_config() -> Dict[str, str]:
         except (json.JSONDecodeError, IOError):
             pass
     
-    # Env vars override file
     if os.getenv("NOVYX_API_KEY"):
         config["api_key"] = os.getenv("NOVYX_API_KEY")
     
@@ -74,12 +74,9 @@ def get_client() -> Optional[Any]:
 def generate_session_id(description: str) -> str:
     """Generate URL-safe session ID from description."""
     import re
-    # Take first 3-4 words, lowercase, hyphenate
     words = description.lower().split()[:4]
     slug = "-".join(words)
-    # Remove non-alphanumeric except hyphens
     slug = re.sub(r'[^a-z0-9-]', '', slug)
-    # Add timestamp suffix for uniqueness
     timestamp = datetime.now().strftime("%m%d")
     return f"{slug}-{timestamp}"
 
@@ -94,7 +91,6 @@ def get_git_status() -> Dict[str, Any]:
     }
     
     try:
-        # Check if git repo
         subprocess.run(
             ["git", "rev-parse", "--git-dir"],
             capture_output=True,
@@ -102,7 +98,6 @@ def get_git_status() -> Dict[str, Any]:
             cwd=os.getcwd()
         )
         
-        # Get branch
         branch = subprocess.run(
             ["git", "branch", "--show-current"],
             capture_output=True,
@@ -112,7 +107,6 @@ def get_git_status() -> Dict[str, Any]:
         if branch.returncode == 0:
             result["branch"] = branch.stdout.strip()
         
-        # Get modified files
         status = subprocess.run(
             ["git", "status", "--porcelain"],
             capture_output=True,
@@ -124,10 +118,9 @@ def get_git_status() -> Dict[str, Any]:
             result["modified_files"] = [
                 line[3:] for line in lines 
                 if line and len(line) > 3
-            ][:20]  # Limit to 20 files
+            ][:20]
             result["dirty"] = len(result["modified_files"]) > 0
         
-        # Get recent commits (last 3)
         log = subprocess.run(
             ["git", "log", "--oneline", "-3"],
             capture_output=True,
@@ -190,9 +183,11 @@ def format_resume_output(session: Dict[str, Any]) -> str:
 
 @click.group()
 @click.version_option(version=__version__)
-def cli():
+@click.pass_context
+def cli(ctx):
     """Novyx Hygiene - Context hygiene for agentic coding."""
-    pass
+    # Ensure context object exists
+    ctx.ensure_object(dict)
 
 
 @cli.command()
@@ -200,13 +195,11 @@ def cli():
 @click.option("--decision", "-d", multiple=True, help="Add a key decision")
 @click.option("--status", "-s", default="In progress", help="Current status")
 @click.option("--session-id", "-i", help="Custom session ID (auto-generated if not provided)")
-def save(task: str, decision: tuple, status: str, session_id: Optional[str]):
+def save(task, decision, status, session_id):
     """Save current session state to Novyx Core."""
-    
     if not session_id:
         session_id = generate_session_id(task)
     
-    # Build session data
     git_info = get_git_status()
     
     session = {
@@ -215,7 +208,7 @@ def save(task: str, decision: tuple, status: str, session_id: Optional[str]):
         "timestamp": datetime.now().isoformat(),
         "working_directory": os.getcwd(),
         "git": git_info,
-        "decisions": list(decision),
+        "decisions": _list(decision),
         "status": status
     }
     
@@ -223,7 +216,6 @@ def save(task: str, decision: tuple, status: str, session_id: Optional[str]):
     
     if client:
         try:
-            # Store to Novyx
             result = client.store(
                 observation=json.dumps(session),
                 tags=[SESSION_TAG, session_id],
@@ -240,21 +232,17 @@ def save(task: str, decision: tuple, status: str, session_id: Optional[str]):
             click.echo(f"  Task: {task}")
             click.echo(f"  Files touched: {len(git_info.get('modified_files', []))}")
             click.echo(f"  Decisions: {len(decision)}")
-            click.echo(f"  Timestamp: {session['timestamp']}")
-            
             if result and result.get('memory_id'):
                 click.echo(f"  Memory ID: {result['memory_id']}")
                 
         except Exception as e:
             click.echo(f"✗ Failed to save to Novyx: {e}", err=True)
-            click.echo("  Falling back to local save...", err=True)
             _save_local(session)
     else:
-        # Fallback to local file
         _save_local(session)
 
 
-def _save_local(session: Dict[str, Any]):
+def _save_local(session):
     """Save session locally if Novyx unavailable."""
     local_dir = CONFIG_DIR / "sessions"
     local_dir.mkdir(parents=True, exist_ok=True)
@@ -270,13 +258,12 @@ def _save_local(session: Dict[str, Any]):
 
 @cli.command()
 @click.argument("session_id", required=False)
-def resume(session_id: Optional[str]):
+def resume(session_id):
     """Resume a session. Prints formatted context to paste."""
     
     client = get_client()
     
     if client and not session_id:
-        # Get most recent session
         try:
             results = client.search(
                 query="session-snapshot",
@@ -291,7 +278,6 @@ def resume(session_id: Optional[str]):
             click.echo(f"⚠ Novyx search failed: {e}", err=True)
     
     if client and session_id:
-        # Get specific session
         try:
             results = client.search(
                 query=session_id,
@@ -305,11 +291,10 @@ def resume(session_id: Optional[str]):
         except Exception as e:
             click.echo(f"⚠ Novyx search failed: {e}", err=True)
     
-    # Fallback to local
     _resume_local(session_id)
 
 
-def _resume_local(session_id: Optional[str]):
+def _resume_local(session_id):
     """Resume from local storage."""
     local_dir = CONFIG_DIR / "sessions"
     
@@ -328,7 +313,6 @@ def _resume_local(session_id: Optional[str]):
             click.echo(f"✗ Session not found: {session_id}")
             return
     
-    # Get most recent
     files = sorted(local_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     if files:
         with open(files[0]) as f:
@@ -338,9 +322,9 @@ def _resume_local(session_id: Optional[str]):
         click.echo("✗ No sessions found.")
 
 
-@cli.command()
+@cli.command(name="list")
 @click.option("--limit", "-n", default=10, help="Number of sessions to show")
-def list(limit: int):
+def list_sessions(limit):
     """List all saved sessions."""
     
     client = get_client()
@@ -367,7 +351,6 @@ def list(limit: int):
         except Exception as e:
             click.echo(f"⚠ Novyx search failed: {e}", err=True)
     
-    # Fallback to local
     if not sessions:
         local_dir = CONFIG_DIR / "sessions"
         if local_dir.exists():
@@ -396,7 +379,6 @@ def list(limit: int):
         click.echo(f"\n{s['id']}")
         click.echo(f"  {s['task'][:60]}{'...' if len(s['task']) > 60 else ''}")
         
-        # Format timestamp
         try:
             dt = datetime.fromisoformat(s['timestamp'])
             ago = _format_ago(dt)
@@ -407,7 +389,7 @@ def list(limit: int):
         click.echo(f"  Status: {s['status']}")
 
 
-def _format_ago(dt: datetime) -> str:
+def _format_ago(dt):
     """Format datetime as human-readable 'ago'."""
     now = datetime.now()
     diff = now - dt
@@ -435,7 +417,7 @@ def config():
 @config.command(name="set")
 @click.argument("key")
 @click.argument("value")
-def config_set(key: str, value: str):
+def config_set(key, value):
     """Set a config value."""
     cfg = get_config()
     cfg[key] = value
