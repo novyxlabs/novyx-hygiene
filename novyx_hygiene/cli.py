@@ -13,9 +13,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-# Try to import novyx, fallback to mock for dev
+# Try to import novyx, fallback to local-only mode
 try:
-    from novyx_ram import NovyxRAMClient
+    from novyx import Novyx
     NOVYX_AVAILABLE = True
 except ImportError:
     NOVYX_AVAILABLE = False
@@ -68,7 +68,7 @@ def get_client() -> Optional[Any]:
     if not api_key:
         return None
     
-    return NovyxRAMClient(api_key=api_key)
+    return Novyx(api_key=api_key)
 
 
 def generate_session_id(description: str) -> str:
@@ -216,24 +216,18 @@ def save(task, decision, status, session_id):
     
     if client:
         try:
-            result = client.store(
+            result = client.remember(
                 observation=json.dumps(session),
-                tags=[SESSION_TAG, session_id],
+                tags=[SESSION_TAG, session_id, "session-snapshot"],
                 importance=8,
-                metadata={
-                    "session_id": session_id,
-                    "task": task,
-                    "timestamp": session["timestamp"],
-                    "type": "session-snapshot"
-                }
             )
-            
+
             click.echo(f"✓ Session saved: {session_id}")
             click.echo(f"  Task: {task}")
             click.echo(f"  Files touched: {len(git_info.get('modified_files', []))}")
             click.echo(f"  Decisions: {len(decision)}")
-            if result and result.get('memory_id'):
-                click.echo(f"  Memory ID: {result['memory_id']}")
+            if result and result.get('id'):
+                click.echo(f"  Memory ID: {result['id']}")
                 
         except Exception as e:
             click.echo(f"✗ Failed to save to Novyx: {e}", err=True)
@@ -265,27 +259,29 @@ def resume(session_id):
     
     if client and not session_id:
         try:
-            results = client.search(
+            result = client.recall(
                 query="session-snapshot",
                 tags=[SESSION_TAG],
-                limit=1
+                limit=1,
             )
-            if results:
-                session_data = json.loads(results[0]['observation'])
+            memories = result.memories if hasattr(result, 'memories') else []
+            if memories:
+                session_data = json.loads(memories[0]['observation'])
                 click.echo(format_resume_output(session_data))
                 return
         except Exception as e:
             click.echo(f"⚠ Novyx search failed: {e}", err=True)
-    
+
     if client and session_id:
         try:
-            results = client.search(
+            result = client.recall(
                 query=session_id,
                 tags=[session_id],
-                limit=1
+                limit=1,
             )
-            if results:
-                session_data = json.loads(results[0]['observation'])
+            memories = result.memories if hasattr(result, 'memories') else []
+            if memories:
+                session_data = json.loads(memories[0]['observation'])
                 click.echo(format_resume_output(session_data))
                 return
         except Exception as e:
@@ -332,11 +328,12 @@ def list_sessions(limit):
     
     if client:
         try:
-            results = client.search(
+            result = client.recall(
                 query="session-snapshot",
                 tags=[SESSION_TAG],
-                limit=limit
+                limit=limit,
             )
+            results = result.memories if hasattr(result, 'memories') else []
             for r in results:
                 try:
                     data = json.loads(r['observation'])
