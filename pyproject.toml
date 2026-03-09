@@ -9,7 +9,7 @@ description = "Context hygiene for agentic coding. Save and resume Claude Code/C
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "Novyx Labs", email = "hello@novyxlabs.com"}
+    {name = "Novyx Labs", email = "blake@novyxlabs.com"}
 ]
 keywords = ["ai", "agents", "claude", "codex", "context", "memory", "openclaw"]
 classifiers = [
@@ -38,8 +38,8 @@ dev = ["pytest>=7.0", "black", "ruff"]
 hygiene = "novyx_hygiene.cli:cli"
 
 [project.urls]
-Homepage = "https://github.com/novyxlabs/novyx-hygiene"
-Documentation = "https://github.com/novyxlabs/novyx-hygiene#readme"
+Homepage = "https://novyxlabs.com"
+Documentation = "https://novyxlabs.com/docs"
 Repository = "https://github.com/novyxlabs/novyx-hygiene"
 Issues = "https://github.com/novyxlabs/novyx-hygiene/issues"
 
