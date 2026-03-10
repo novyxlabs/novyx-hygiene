@@ -4,28 +4,28 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "novyx-hygiene"
-version = "1.0.0"
-description = "Context hygiene for agentic coding. Save and resume Claude Code/Codex sessions."
+version = "2.0.0"
+description = "Context hygiene for agentic coding. Auto-save and auto-resume Claude Code sessions."
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
     {name = "Novyx Labs", email = "blake@novyxlabs.com"}
 ]
-keywords = ["ai", "agents", "claude", "codex", "context", "memory", "openclaw"]
+keywords = ["ai", "agents", "claude", "codex", "context", "memory", "hooks", "session"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 dependencies = [
     "click>=8.0.0",
 ]
@@ -35,7 +35,7 @@ novyx = ["novyx>=3.0.0"]
 dev = ["pytest>=7.0", "black", "ruff"]
 
 [project.scripts]
-hygiene = "novyx_hygiene.cli:cli"
+hygiene = "novyx_hygiene.cli:main"
 
 [project.urls]
 Homepage = "https://novyxlabs.com"

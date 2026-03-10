@@ -1,396 +1,55 @@
 #!/usr/bin/env python3
 """
-Novyx Hygiene CLI
-Context hygiene for agentic coding sessions.
+Novyx Hygiene CLI — Context hygiene for agentic coding.
+
+Commands:
+  hygiene save       — Save session state (auto-writes .claude/hygiene.md)
+  hygiene resume     — Print formatted context to paste (or read .claude/hygiene.md)
+  hygiene inject     — Emit context to stdout (used by Claude Code hooks)
+  hygiene score      — Check context health
+  hygiene install    — Wire up Claude Code hooks for auto-save/inject
+  hygiene uninstall  — Remove hooks
+  hygiene list       — List saved sessions
+  hygiene config     — Manage settings
 """
 
-import os
-import sys
 import json
-import subprocess
-import click
+import os
+import re
+import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 
-# Try to import novyx, fallback to local-only mode
-try:
-    from novyx import Novyx
-    NOVYX_AVAILABLE = True
-except ImportError:
-    NOVYX_AVAILABLE = False
+import click
 
 from . import __version__
+from .storage import (
+    save_session,
+    load_session,
+    list_sessions as storage_list_sessions,
+    get_config,
+    save_config,
+)
+from .context import get_git_context, get_session_context, score_session
+from .writer import write_hygiene_md, render_hook_output
+from .hooks import install_hooks, uninstall_hooks
 
-# Config file location
-CONFIG_DIR = Path.home() / ".novyx_hygiene"
-CONFIG_FILE = CONFIG_DIR / "config.json"
-
-# Tags for session memories
-SESSION_TAG = "hygiene-session"
-
-# Keep reference to built-in list before it's shadowed by our command
+# Keep reference to built-in list
 _list = list
 
 
-def get_config() -> Dict[str, str]:
-    """Load config from file or env."""
-    config = {}
-    
-    if CONFIG_FILE.exists():
-        try:
-            with open(CONFIG_FILE) as f:
-                config = json.load(f)
-        except (json.JSONDecodeError, IOError):
-            pass
-    
-    if os.getenv("NOVYX_API_KEY"):
-        config["api_key"] = os.getenv("NOVYX_API_KEY")
-    
-    return config
-
-
-def save_config(config: Dict[str, str]):
-    """Save config to file."""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f, indent=2)
-
-
-def get_client() -> Optional[Any]:
-    """Get Novyx client if available."""
-    if not NOVYX_AVAILABLE:
-        return None
-    
-    config = get_config()
-    api_key = config.get("api_key") or os.getenv("NOVYX_API_KEY")
-    
-    if not api_key:
-        return None
-    
-    return Novyx(api_key=api_key)
-
-
-def generate_session_id(description: str) -> str:
-    """Generate URL-safe session ID from description."""
-    import re
+def _generate_session_id(description: str) -> str:
     words = description.lower().split()[:4]
     slug = "-".join(words)
-    slug = re.sub(r'[^a-z0-9-]', '', slug)
+    slug = re.sub(r"[^a-z0-9-]", "", slug)
     timestamp = datetime.now().strftime("%m%d")
     return f"{slug}-{timestamp}"
 
 
-def get_git_status() -> Dict[str, Any]:
-    """Get current git status."""
-    result = {
-        "branch": "unknown",
-        "dirty": False,
-        "modified_files": [],
-        "recent_commits": []
-    }
-    
-    try:
-        subprocess.run(
-            ["git", "rev-parse", "--git-dir"],
-            capture_output=True,
-            check=True,
-            cwd=os.getcwd()
-        )
-        
-        branch = subprocess.run(
-            ["git", "branch", "--show-current"],
-            capture_output=True,
-            text=True,
-            cwd=os.getcwd()
-        )
-        if branch.returncode == 0:
-            result["branch"] = branch.stdout.strip()
-        
-        status = subprocess.run(
-            ["git", "status", "--porcelain"],
-            capture_output=True,
-            text=True,
-            cwd=os.getcwd()
-        )
-        if status.returncode == 0:
-            lines = status.stdout.strip().split("\n")
-            result["modified_files"] = [
-                line[3:] for line in lines 
-                if line and len(line) > 3
-            ][:20]
-            result["dirty"] = len(result["modified_files"]) > 0
-        
-        log = subprocess.run(
-            ["git", "log", "--oneline", "-3"],
-            capture_output=True,
-            text=True,
-            cwd=os.getcwd()
-        )
-        if log.returncode == 0:
-            result["recent_commits"] = [
-                line.strip() for line in log.stdout.strip().split("\n")
-                if line.strip()
-            ][:3]
-            
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pass
-    
-    return result
-
-
-def format_resume_output(session: Dict[str, Any]) -> str:
-    """Format session for display/pasting."""
-    lines = [
-        "",
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        f"📋 SESSION CONTEXT: {session.get('session_id', 'unknown')}",
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        "",
-        f"🎯 Task: {session.get('task', 'No description')}",
-    ]
-    
-    if session.get('working_directory'):
-        lines.append(f"📂 Directory: {session['working_directory']}")
-    
-    if session.get('git', {}).get('branch'):
-        lines.append(f"🌿 Branch: {session['git']['branch']}")
-    
-    if session.get('decisions'):
-        lines.extend(["", "📝 Key Decisions:"])
-        for i, decision in enumerate(session['decisions'][:5], 1):
-            lines.append(f"  {i}. {decision}")
-    
-    if session.get('git', {}).get('modified_files'):
-        lines.extend(["", "📁 Files in Flight:"])
-        for f in session['git']['modified_files'][:10]:
-            lines.append(f"  • {f}")
-    
-    if session.get('status'):
-        lines.append(f"\n⚡ Status: {session['status']}")
-    
-    lines.extend([
-        "",
-        f"💾 Session ID: {session.get('session_id', 'unknown')}",
-        f"   Saved: {session.get('timestamp', 'unknown')}",
-        "",
-        "Paste this into your Claude/Codex session to continue.",
-        ""
-    ])
-    
-    return "\n".join(lines)
-
-
-@click.group()
-@click.version_option(version=__version__)
-@click.pass_context
-def cli(ctx):
-    """Novyx Hygiene - Context hygiene for agentic coding."""
-    # Ensure context object exists
-    ctx.ensure_object(dict)
-
-
-@cli.command()
-@click.argument("task")
-@click.option("--decision", "-d", multiple=True, help="Add a key decision")
-@click.option("--status", "-s", default="In progress", help="Current status")
-@click.option("--session-id", "-i", help="Custom session ID (auto-generated if not provided)")
-def save(task, decision, status, session_id):
-    """Save current session state to Novyx Core."""
-    if not session_id:
-        session_id = generate_session_id(task)
-    
-    git_info = get_git_status()
-    
-    session = {
-        "session_id": session_id,
-        "task": task,
-        "timestamp": datetime.now().isoformat(),
-        "working_directory": os.getcwd(),
-        "git": git_info,
-        "decisions": _list(decision),
-        "status": status
-    }
-    
-    client = get_client()
-    
-    if client:
-        try:
-            result = client.remember(
-                observation=json.dumps(session),
-                tags=[SESSION_TAG, session_id, "session-snapshot"],
-                importance=8,
-            )
-
-            click.echo(f"✓ Session saved: {session_id}")
-            click.echo(f"  Task: {task}")
-            click.echo(f"  Files touched: {len(git_info.get('modified_files', []))}")
-            click.echo(f"  Decisions: {len(decision)}")
-            if result and result.get('id'):
-                click.echo(f"  Memory ID: {result['id']}")
-                
-        except Exception as e:
-            click.echo(f"✗ Failed to save to Novyx: {e}", err=True)
-            _save_local(session)
-    else:
-        _save_local(session)
-
-
-def _save_local(session):
-    """Save session locally if Novyx unavailable."""
-    local_dir = CONFIG_DIR / "sessions"
-    local_dir.mkdir(parents=True, exist_ok=True)
-    
-    filepath = local_dir / f"{session['session_id']}.json"
-    with open(filepath, "w") as f:
-        json.dump(session, f, indent=2)
-    
-    click.echo(f"✓ Session saved locally: {session['session_id']}")
-    click.echo(f"  Location: {filepath}")
-    click.echo(f"  (Set NOVYX_API_KEY to enable cloud persistence)")
-
-
-@cli.command()
-@click.argument("session_id", required=False)
-def resume(session_id):
-    """Resume a session. Prints formatted context to paste."""
-    
-    client = get_client()
-    
-    if client and not session_id:
-        try:
-            result = client.recall(
-                query="session-snapshot",
-                tags=[SESSION_TAG],
-                limit=1,
-            )
-            memories = result.memories if hasattr(result, 'memories') else []
-            if memories:
-                session_data = json.loads(memories[0]['observation'])
-                click.echo(format_resume_output(session_data))
-                return
-        except Exception as e:
-            click.echo(f"⚠ Novyx search failed: {e}", err=True)
-
-    if client and session_id:
-        try:
-            result = client.recall(
-                query=session_id,
-                tags=[session_id],
-                limit=1,
-            )
-            memories = result.memories if hasattr(result, 'memories') else []
-            if memories:
-                session_data = json.loads(memories[0]['observation'])
-                click.echo(format_resume_output(session_data))
-                return
-        except Exception as e:
-            click.echo(f"⚠ Novyx search failed: {e}", err=True)
-    
-    _resume_local(session_id)
-
-
-def _resume_local(session_id):
-    """Resume from local storage."""
-    local_dir = CONFIG_DIR / "sessions"
-    
-    if not local_dir.exists():
-        click.echo("✗ No sessions found locally.")
-        return
-    
-    if session_id:
-        filepath = local_dir / f"{session_id}.json"
-        if filepath.exists():
-            with open(filepath) as f:
-                session = json.load(f)
-            click.echo(format_resume_output(session))
-            return
-        else:
-            click.echo(f"✗ Session not found: {session_id}")
-            return
-    
-    files = sorted(local_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if files:
-        with open(files[0]) as f:
-            session = json.load(f)
-        click.echo(format_resume_output(session))
-    else:
-        click.echo("✗ No sessions found.")
-
-
-@cli.command(name="list")
-@click.option("--limit", "-n", default=10, help="Number of sessions to show")
-def list_sessions(limit):
-    """List all saved sessions."""
-    
-    client = get_client()
-    sessions = []
-    
-    if client:
-        try:
-            result = client.recall(
-                query="session-snapshot",
-                tags=[SESSION_TAG],
-                limit=limit,
-            )
-            results = result.memories if hasattr(result, 'memories') else []
-            for r in results:
-                try:
-                    data = json.loads(r['observation'])
-                    sessions.append({
-                        'id': data.get('session_id', 'unknown'),
-                        'task': data.get('task', 'No description'),
-                        'timestamp': data.get('timestamp', ''),
-                        'status': data.get('status', 'Unknown')
-                    })
-                except (json.JSONDecodeError, KeyError):
-                    continue
-        except Exception as e:
-            click.echo(f"⚠ Novyx search failed: {e}", err=True)
-    
-    if not sessions:
-        local_dir = CONFIG_DIR / "sessions"
-        if local_dir.exists():
-            files = sorted(local_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-            for f in files[:limit]:
-                try:
-                    with open(f) as fp:
-                        data = json.load(fp)
-                    sessions.append({
-                        'id': data.get('session_id', f.stem),
-                        'task': data.get('task', 'No description'),
-                        'timestamp': data.get('timestamp', ''),
-                        'status': data.get('status', 'Unknown')
-                    })
-                except (json.JSONDecodeError, IOError):
-                    continue
-    
-    if not sessions:
-        click.echo("No sessions found.")
-        return
-    
-    click.echo("\nSESSIONS")
-    click.echo("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    
-    for s in sessions:
-        click.echo(f"\n{s['id']}")
-        click.echo(f"  {s['task'][:60]}{'...' if len(s['task']) > 60 else ''}")
-        
-        try:
-            dt = datetime.fromisoformat(s['timestamp'])
-            ago = _format_ago(dt)
-            click.echo(f"  Saved: {ago}")
-        except:
-            pass
-        
-        click.echo(f"  Status: {s['status']}")
-
-
-def _format_ago(dt):
-    """Format datetime as human-readable 'ago'."""
+def _format_ago(dt: datetime) -> str:
     now = datetime.now()
     diff = now - dt
-    
     if diff.days > 1:
         return f"{diff.days} days ago"
     elif diff.days == 1:
@@ -404,6 +63,231 @@ def _format_ago(dt):
     else:
         return "just now"
 
+
+@click.group()
+@click.version_option(version=__version__)
+def cli():
+    """Novyx Hygiene - Context hygiene for agentic coding."""
+    pass
+
+
+# ---------------------------------------------------------------------------
+# save
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.argument("task", required=False)
+@click.option("--decision", "-d", multiple=True, help="Key decision to record")
+@click.option("--status", "-s", default="In progress", help="Current status")
+@click.option("--session-id", "-i", help="Custom session ID")
+@click.option("--auto", is_flag=True, hidden=True, help="Called by hook (uses last task or cwd)")
+@click.option("--quiet", "-q", is_flag=True, help="Minimal output")
+@click.option("--no-md", is_flag=True, help="Skip writing .claude/hygiene.md")
+def save(task, decision, status, session_id, auto, quiet, no_md):
+    """Save current session state."""
+    if not task and auto:
+        # Auto-save: try to load last session's task, or use cwd basename
+        last = load_session()
+        if last:
+            task = last.get("task", Path(os.getcwd()).name)
+            if not session_id:
+                session_id = last.get("session_id")
+            # Carry forward decisions
+            if not decision and last.get("decisions"):
+                decision = tuple(last["decisions"])
+        else:
+            task = Path(os.getcwd()).name
+    elif not task:
+        click.echo("Error: task description required. Usage: hygiene save \"your task\"", err=True)
+        raise SystemExit(1)
+
+    if not session_id:
+        session_id = _generate_session_id(task)
+
+    git = get_git_context()
+
+    session = {
+        "session_id": session_id,
+        "task": task,
+        "timestamp": datetime.now().isoformat(),
+        "working_directory": os.getcwd(),
+        "git": git,
+        "decisions": _list(decision),
+        "status": status,
+    }
+
+    result = save_session(session)
+
+    # Write .claude/hygiene.md
+    md_path = None
+    if not no_md:
+        try:
+            md_path = write_hygiene_md(session)
+        except (OSError, PermissionError) as e:
+            if not quiet:
+                click.echo(f"  (could not write hygiene.md: {e})", err=True)
+
+    if not quiet:
+        click.echo(f"Saved: {session_id}")
+        click.echo(f"  Task: {task}")
+        all_files = set(
+            git.get("modified_files", [])
+            + git.get("staged_files", [])
+            + git.get("untracked_files", [])
+        )
+        click.echo(f"  Files: {len(all_files)}")
+        click.echo(f"  Decisions: {len(decision)}")
+        if result.get("cloud"):
+            click.echo(f"  Synced to Novyx Cloud")
+        if md_path:
+            click.echo(f"  Wrote {md_path}")
+
+
+# ---------------------------------------------------------------------------
+# resume
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.argument("session_id", required=False)
+def resume(session_id):
+    """Resume a session. Prints formatted context to paste."""
+    session = load_session(session_id)
+    if not session:
+        if session_id:
+            click.echo(f"Session not found: {session_id}", err=True)
+        else:
+            click.echo("No sessions found.", err=True)
+        raise SystemExit(1)
+
+    click.echo(_format_resume(session))
+
+
+# ---------------------------------------------------------------------------
+# inject (for hooks — writes to stdout which Claude reads)
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.argument("session_id", required=False)
+def inject(session_id):
+    """Emit session context to stdout for Claude Code hook injection."""
+    session = load_session(session_id)
+    if not session:
+        # Silent — don't pollute Claude's context with errors
+        return
+
+    # Write to stdout (Claude reads this)
+    sys.stdout.write(render_hook_output(session))
+    sys.stdout.write("\n")
+
+
+# ---------------------------------------------------------------------------
+# score
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.argument("session_id", required=False)
+def score(session_id):
+    """Check context health score."""
+    if session_id:
+        session = load_session(session_id)
+    else:
+        # Score current state
+        git = get_git_context()
+        last = load_session()
+        session = last or {
+            "task": Path(os.getcwd()).name,
+            "timestamp": datetime.now().isoformat(),
+            "git": git,
+            "decisions": [],
+            "status": "Unknown",
+        }
+        # Update git to current state
+        session["git"] = git
+
+    result = score_session(session)
+
+    click.echo(f"\nContext Health: {result['grade']} ({result['score']}/100)")
+    click.echo("=" * 40)
+
+    if result["issues"]:
+        click.echo("\nIssues:")
+        for issue in result["issues"]:
+            click.echo(f"  - {issue}")
+
+    if result["tips"]:
+        click.echo("\nTips:")
+        for tip in result["tips"]:
+            click.echo(f"  - {tip}")
+
+    if not result["issues"] and not result["tips"]:
+        click.echo("\nContext looks clean.")
+
+
+# ---------------------------------------------------------------------------
+# install / uninstall
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.option("--user", is_flag=True, help="Install to ~/.claude (all projects)")
+def install(user):
+    """Install Claude Code hooks for auto-save and auto-inject."""
+    scope = "user" if user else "project"
+    result = install_hooks(scope=scope)
+
+    click.echo(f"Hooks installed: {result['settings_path']}")
+    click.echo(f"  Events: {', '.join(result['events_configured'])}")
+    click.echo()
+    click.echo("What this does:")
+    click.echo("  - Before /compact: auto-saves your session")
+    click.echo("  - After compact/clear/resume: injects last context into Claude")
+    click.echo()
+    click.echo("Claude will now remember where you left off automatically.")
+
+
+@cli.command()
+@click.option("--user", is_flag=True, help="Uninstall from ~/.claude")
+def uninstall(user):
+    """Remove Claude Code hooks."""
+    scope = "user" if user else "project"
+    removed = uninstall_hooks(scope=scope)
+    if removed:
+        click.echo("Hooks removed.")
+    else:
+        click.echo("No hooks found to remove.")
+
+
+# ---------------------------------------------------------------------------
+# list
+# ---------------------------------------------------------------------------
+
+@cli.command(name="list")
+@click.option("--limit", "-n", default=10, help="Number of sessions to show")
+def list_cmd(limit):
+    """List saved sessions."""
+    sessions = storage_list_sessions(limit=limit)
+
+    if not sessions:
+        click.echo("No sessions found.")
+        return
+
+    click.echo(f"\n{'ID':<30} {'Task':<40} {'Saved':<15} {'Status'}")
+    click.echo("-" * 95)
+
+    for s in sessions:
+        sid = s.get("session_id", "unknown")[:28]
+        task = s.get("task", "")[:38]
+        status = s.get("status", "")[:15]
+        try:
+            dt = datetime.fromisoformat(s["timestamp"])
+            ago = _format_ago(dt)
+        except (ValueError, TypeError, KeyError):
+            ago = "?"
+        click.echo(f"  {sid:<28} {task:<40} {ago:<15} {status}")
+
+
+# ---------------------------------------------------------------------------
+# config
+# ---------------------------------------------------------------------------
 
 @cli.group()
 def config():
@@ -419,27 +303,75 @@ def config_set(key, value):
     cfg = get_config()
     cfg[key] = value
     save_config(cfg)
-    click.echo(f"✓ Set {key}")
+    click.echo(f"Set {key}")
 
 
 @config.command(name="show")
 def config_show():
     """Show current configuration."""
     cfg = get_config()
-    
-    click.echo("Configuration:")
-    click.echo("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    
+    if not cfg:
+        click.echo("(empty)")
+        return
+
     for key, value in cfg.items():
-        if "key" in key.lower() or "secret" in key.lower() or "password" in key.lower():
+        if "key" in key.lower() or "secret" in key.lower():
             masked = value[:8] + "..." if len(value) > 12 else "***"
             click.echo(f"  {key}: {masked}")
         else:
             click.echo(f"  {key}: {value}")
-    
-    if not cfg:
-        click.echo("  (empty)")
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _format_resume(session: dict) -> str:
+    """Format session for display."""
+    lines = [
+        "",
+        "=" * 50,
+        f"SESSION: {session.get('session_id', 'unknown')}",
+        "=" * 50,
+        "",
+        f"Task: {session.get('task', 'No description')}",
+        f"Status: {session.get('status', 'Unknown')}",
+        f"Saved: {session.get('timestamp', 'unknown')}",
+        f"Directory: {session.get('working_directory', 'unknown')}",
+    ]
+
+    git = session.get("git", {})
+    if git.get("branch"):
+        lines.append(f"Branch: {git['branch']}")
+
+    decisions = session.get("decisions", [])
+    if decisions:
+        lines.extend(["", "Decisions:"])
+        for i, d in enumerate(decisions[:10], 1):
+            lines.append(f"  {i}. {d}")
+
+    all_files = set(
+        git.get("modified_files", [])
+        + git.get("staged_files", [])
+        + git.get("untracked_files", [])
+    )
+    if all_files:
+        lines.extend(["", "Files in flight:"])
+        for f in sorted(all_files)[:15]:
+            lines.append(f"  - {f}")
+
+    if git.get("recent_commits"):
+        lines.extend(["", "Recent commits:"])
+        for c in git["recent_commits"][:5]:
+            lines.append(f"  - {c}")
+
+    lines.extend(["", "Paste this into your new session to continue.", ""])
+    return "\n".join(lines)
+
+
+def main():
+    cli()
 
 
 if __name__ == "__main__":
-    cli()
+    main()

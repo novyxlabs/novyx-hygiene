@@ -3,137 +3,106 @@
 [![PyPI version](https://badge.fury.io/py/novyx-hygiene.svg)](https://badge.fury.io/py/novyx-hygiene)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Context hygiene for agentic coding. Because manually exporting/copying/pasting session state is bullshit.**
+**Automatic context persistence for Claude Code.** One command to install, then it just works.
 
-Novyx Hygiene automates the session persistence workflow that Claude Code and Codex users are doing manually: export context, clear the session, paste it back, and hope nothing got lost.
+Your sessions survive `/compact`, `/clear`, and restarts — no export, no paste, no manual steps.
 
-Built on [Novyx Core](https://novyxlabs.com) — persistent memory that survives session resets.
+---
+
+## How It Works
+
+```bash
+pip install novyx-hygiene
+hygiene install
+```
+
+That's it. From now on:
+
+1. **Before `/compact`**: Hygiene auto-saves your session (task, decisions, files, git state)
+2. **After compact/clear/resume**: Hygiene injects your context back into Claude automatically
+3. **On disk**: A `.claude/hygiene.md` file keeps Claude oriented between sessions
+
+No commands to remember. No context to paste. Claude just knows where you left off.
 
 ---
 
 ## The Problem
 
-You're coding with Claude Code or Codex. Your context fills up. You need to:
+Context fills up. You `/compact` or `/clear`. Now Claude has amnesia.
 
-1. Run `/export` to copy everything
-2. Run `/clear` to reset the session  
-3. Paste the context back
+The manual workaround:
+1. `/export` to copy everything
+2. `/clear` to reset
+3. Paste context back
 4. Re-establish where you were
+5. **Repeat every time**
 
-**Every. Single. Time.**
+Worse: if compaction hits automatically, you lose context without warning.
 
-Worse: if you forget to export before compaction hits, you lose context. If you mix missions in one session, the context gets contaminated.
-
-Reddit is full of [workarounds](https://www.reddit.com/r/ClaudeAI/comments/1p05r7p/my_claude_code_context_window_strategy_200k_is/). Velvet Shark wrote a [whole guide](https://velvetshark.com/openclaw-memory-masterclass) on manual context management.
-
-**This shouldn't be manual.**
-
----
-
-## The Solution
-
-Three commands. Zero friction.
-
-```bash
-# Save your current session state
-hygiene save "Implementing auth flow"
-
-# Later... resume where you left off
-hygiene resume
-# Paste the output into your new Claude/Codex session
-
-# See all your saved sessions
-hygiene list
-```
-
----
-
-## 30-Second Demo
-
-```bash
-# You're deep in a coding session
-$ hygiene save "Refactoring payment module - Stripe integration halfway done"
-✓ Session saved: refactoring-payment-module
-  Task: Refactoring payment module - Stripe integration halfway done
-  Files touched: src/payments/stripe.py, tests/test_payments.py
-  Decisions: 3
-  Timestamp: 2026-03-08T12:46:00Z
-
-# Context fills up, you clear the session
-$ /clear
-
-# Resume with full context
-$ hygiene resume
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📋 SESSION CONTEXT: refactoring-payment-module
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-🎯 Task: Refactoring payment module - Stripe integration halfway done
-
-📝 Key Decisions:
-  • Using Stripe's new Payment Intents API (not Charges)
-  • Webhook handler goes in src/webhooks/stripe.py
-  • Keeping backward compatibility for existing customers
-
-📁 Files in Flight:
-  • src/payments/stripe.py (lines 45-120 modified)
-  • tests/test_payments.py (new test file)
-
-⚡ Status: In progress - webhook handler pending
-
-💾 Session ID: refactoring-payment-module
-   Saved: 2026-03-08T12:46:00Z
-
-Paste this into your Claude/Codex session to continue.
-```
-
----
-
-## Installation
-
-```bash
-pip install novyx-hygiene
-```
-
-**Works out of the box** — no API key required for local mode. Sessions are saved to `~/.novyx_hygiene/sessions/`.
-
-**Optional:** Set your Novyx API key for cloud persistence, semantic search, and cross-machine sync:
-
-```bash
-export NOVYX_API_KEY="nram_your_key_here"
-# or
-hygiene config set api_key nram_your_key_here
-```
+**Novyx Hygiene makes this automatic.**
 
 ---
 
 ## Commands
 
-### `hygiene save <task-description>`
+### `hygiene install`
 
-Save current session state to Novyx Core.
+Wire up Claude Code hooks. Run once per project (or `--user` for all projects).
 
 ```bash
-hygiene save "Building user auth flow"
+hygiene install          # Project-level (.claude/settings.local.json)
+hygiene install --user   # User-level (~/.claude/settings.json)
 ```
 
-Captures:
-- Task description
-- Working directory
-- Recent git status
-- Files you've touched (from git)
-- Any decisions you flag
+Installs hooks for:
+- `PreCompact` — auto-save before context compaction
+- `SessionStart` — auto-inject after compact, clear, or resume
+
+### `hygiene save <task>`
+
+Manually save session state. Also auto-writes `.claude/hygiene.md`.
+
+```bash
+hygiene save "Building auth flow - JWT login done, registration next"
+hygiene save "Refactoring payments" -d "Use Stripe Intents API" -d "Keep backward compat"
+hygiene save "Bug fix" -s "Root cause found, writing test"
+```
+
+Options:
+- `-d` / `--decision` — Record a key decision (repeatable)
+- `-s` / `--status` — Set status (default: "In progress")
+- `-i` / `--session-id` — Custom session ID
+- `--no-md` — Skip writing `.claude/hygiene.md`
 
 ### `hygiene resume [session-id]`
 
-Print formatted context to paste into a new session.
+Print session context for pasting (useful without hooks installed).
 
 ```bash
-# Resume last session
-hygiene resume
+hygiene resume                    # Most recent session
+hygiene resume auth-flow-0309     # Specific session
+```
 
-# Resume specific session
-hygiene resume refactoring-payment-module
+### `hygiene inject`
+
+Emit context to stdout — used by Claude Code hooks internally. You don't need to call this directly.
+
+### `hygiene score [session-id]`
+
+Check context health: freshness, file sprawl, decision tracking, mixed concerns.
+
+```bash
+$ hygiene score
+Context Health: B (80/100)
+========================================
+
+Issues:
+  - 12 files in flight
+  - Changes span 5 top-level directories — possible mixed concerns
+
+Tips:
+  - Consider committing completed work before continuing
+  - Consider splitting into focused sessions
 ```
 
 ### `hygiene list`
@@ -142,93 +111,82 @@ List all saved sessions.
 
 ```bash
 hygiene list
+hygiene list -n 5
 ```
 
-Output:
-```
-SESSIONS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+### `hygiene uninstall`
 
-refactoring-payment-module
-  Building payment module - Stripe integration
-  Saved: 2 hours ago
-  Status: In progress
+Remove hooks.
 
-api-redesign
-  Migrating from REST to GraphQL
-  Saved: 1 day ago
-  Status: Completed
+```bash
+hygiene uninstall
+hygiene uninstall --user
 ```
 
 ### `hygiene config`
 
-Manage configuration.
-
 ```bash
-hygiene config set api_key nram_xxx
+hygiene config set api_key nram_xxx    # Enable cloud sync
 hygiene config show
 ```
 
 ---
 
-## Why Novyx Core?
+## What Gets Saved
 
-Novyx Hygiene uses [Novyx Core](https://novyxlabs.com) for persistence:
+Every session snapshot captures:
 
-- **Semantic search** — Find sessions by description, not just ID
-- **Integrity verification** — SHA-256 every artifact
-- **Rollback** — Accidentally overwrote a session? Roll back.
-- **Audit trail** — Know when you saved what
-
-Your session state survives compaction, session resets, even computer restarts.
+- **Task description** — what you're working on
+- **Key decisions** — architectural choices, tradeoffs
+- **Status** — where you left off
+- **Git state** — branch, modified/staged/untracked files, recent commits
+- **Working directory** — so you resume in the right place
+- **Timestamp** — for freshness scoring
 
 ---
 
-## Workflow Integration
+## Cloud Sync (Optional)
 
-### With Claude Code
+By default, sessions are saved locally to `~/.novyx_hygiene/sessions/`.
 
-```bash
-# Before your session gets heavy
-hygiene save "Task description here"
-
-# When context fills up
-/compact
-
-# Or start fresh
-/clear
-hygiene resume
-```
-
-### With Codex CLI
+Add a [Novyx](https://novyxlabs.com) API key for cloud persistence, semantic search across sessions, and cross-machine sync:
 
 ```bash
-# Save before you hit rate limits
-codex "implement feature"
-hygiene save "Feature X halfway done"
-
-# Later, resume
-codex
-# Paste hygiene resume output
+pip install novyx-hygiene[novyx]
+hygiene config set api_key nram_your_key_here
 ```
 
 ---
 
-## Roadmap
+## How Hooks Work
 
-**v1.0 (Tonight):** Save, resume, list. The core workflow.
+After `hygiene install`, your `.claude/settings.local.json` gets:
 
-**v2.0 (Soon):**
-- Auto-monitor context usage
-- MCP token tracking
-- Smart pruning suggestions
+```json
+{
+  "hooks": {
+    "PreCompact": [
+      { "hooks": [{ "type": "command", "command": "hygiene save --auto --quiet", "timeout": 10 }] }
+    ],
+    "SessionStart": [
+      { "matcher": "compact", "hooks": [{ "type": "command", "command": "hygiene inject", "timeout": 5 }] },
+      { "matcher": "clear", "hooks": [{ "type": "command", "command": "hygiene inject", "timeout": 5 }] },
+      { "matcher": "resume", "hooks": [{ "type": "command", "command": "hygiene inject", "timeout": 5 }] }
+    ]
+  }
+}
+```
+
+- **PreCompact hook** runs `hygiene save --auto` before compaction, capturing your current state
+- **SessionStart hooks** run `hygiene inject` which outputs your last session context to stdout — Claude reads this automatically
+- Hooks are additive: they won't overwrite your existing Claude Code hooks
 
 ---
 
 ## License
 
-MIT © Novyx Labs
+MIT
 
 ---
 
-**Built by developers, for developers. Stop exporting and start shipping.**
+**Built by [Novyx Labs](https://novyxlabs.com). Stop exporting and start shipping.**
