@@ -13,13 +13,11 @@ Commands:
   hygiene config     — Manage settings
 """
 
-import json
 import os
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List
 
 import click
 
@@ -31,7 +29,7 @@ from .storage import (
     get_config,
     save_config,
 )
-from .context import get_git_context, get_session_context, score_session
+from .context import get_git_context, score_session
 from .writer import write_hygiene_md, render_hook_output
 from .hooks import install_hooks, uninstall_hooks
 
@@ -138,7 +136,7 @@ def save(task, decision, status, session_id, auto, quiet, no_md):
         click.echo(f"  Files: {len(all_files)}")
         click.echo(f"  Decisions: {len(decision)}")
         if result.get("cloud"):
-            click.echo(f"  Synced to Novyx Cloud")
+            click.echo("  Synced to Novyx Cloud")
         if md_path:
             click.echo(f"  Wrote {md_path}")
 

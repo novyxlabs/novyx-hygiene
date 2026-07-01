@@ -1,9 +1,8 @@
 """Tests for Claude Code hooks integration."""
 
 import json
-from pathlib import Path
 
-from novyx_hygiene.hooks import install_hooks, uninstall_hooks, HOOK_EVENTS
+from novyx_hygiene.hooks import install_hooks, uninstall_hooks
 
 
 class TestInstallHooks:

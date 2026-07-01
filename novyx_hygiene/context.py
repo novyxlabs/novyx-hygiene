@@ -3,11 +3,10 @@ Context analysis — git state, session health scoring, drift detection.
 """
 
 import os
-import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 
 
 def get_git_context() -> Dict[str, Any]:

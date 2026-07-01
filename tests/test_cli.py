@@ -4,7 +4,7 @@ import json
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
@@ -19,13 +19,19 @@ def runner():
 
 @pytest.fixture
 def tmp_dirs(tmp_path):
-    """Redirect all storage to tmp."""
+    """Redirect all storage to tmp and isolate config from the real environment."""
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
-    with patch("novyx_hygiene.storage.CONFIG_DIR", tmp_path), \
-         patch("novyx_hygiene.storage.CONFIG_FILE", tmp_path / "config.json"), \
-         patch("novyx_hygiene.storage.SESSIONS_DIR", sessions_dir), \
-         patch("novyx_hygiene.storage.NOVYX_AVAILABLE", False):
+    with (
+        patch.dict(os.environ, {}, clear=False),
+        patch("novyx_hygiene.storage.CONFIG_DIR", tmp_path),
+        patch("novyx_hygiene.storage.CONFIG_FILE", tmp_path / "config.json"),
+        patch("novyx_hygiene.storage.SESSIONS_DIR", sessions_dir),
+        patch("novyx_hygiene.storage.NOVYX_AVAILABLE", False),
+    ):
+        # get_config() overlays NOVYX_API_KEY from the env; drop it so tests
+        # never read (or leak) the developer's real key.
+        os.environ.pop("NOVYX_API_KEY", None)
         yield tmp_path
 
 
@@ -78,8 +84,12 @@ class TestFormatResume:
             "session_id": "test-session",
             "task": "Building a feature",
             "working_directory": "/tmp/project",
-            "git": {"branch": "main", "modified_files": ["file.py"],
-                    "staged_files": [], "untracked_files": []},
+            "git": {
+                "branch": "main",
+                "modified_files": ["file.py"],
+                "staged_files": [],
+                "untracked_files": [],
+            },
             "decisions": ["Use PostgreSQL"],
             "status": "In progress",
             "timestamp": "2026-03-09T12:00:00",
@@ -119,11 +129,17 @@ class TestSave:
         assert (tmp_dirs / "sessions" / "custom-id.json").exists()
 
     def test_save_with_decisions(self, runner, tmp_dirs):
-        result = runner.invoke(cli, [
-            "save", "Auth flow",
-            "-d", "Use JWT",
-            "-d", "PostgreSQL",
-        ])
+        result = runner.invoke(
+            cli,
+            [
+                "save",
+                "Auth flow",
+                "-d",
+                "Use JWT",
+                "-d",
+                "PostgreSQL",
+            ],
+        )
         assert result.exit_code == 0
         files = list((tmp_dirs / "sessions").glob("*.json"))
         data = json.loads(files[0].read_text())
@@ -142,7 +158,7 @@ class TestSave:
 
     def test_save_writes_hygiene_md(self, runner, tmp_dirs):
         with runner.isolated_filesystem() as td:
-            result = runner.invoke(cli, ["save", "Test md write"])
+            runner.invoke(cli, ["save", "Test md write"])
             md_path = Path(td) / ".claude" / "hygiene.md"
             assert md_path.exists()
             content = md_path.read_text()
@@ -166,8 +182,12 @@ class TestResume:
             "task": "Resume me",
             "timestamp": datetime.now().isoformat(),
             "working_directory": "/tmp",
-            "git": {"branch": "main", "modified_files": [],
-                    "staged_files": [], "untracked_files": []},
+            "git": {
+                "branch": "main",
+                "modified_files": [],
+                "staged_files": [],
+                "untracked_files": [],
+            },
             "decisions": [],
             "status": "In progress",
         }
@@ -178,8 +198,11 @@ class TestResume:
         assert "Resume me" in result.output
 
     def test_resume_by_id(self, runner, tmp_dirs):
-        session = {"session_id": "specific", "task": "Specific task",
-                    "git": {"modified_files": [], "staged_files": [], "untracked_files": []}}
+        session = {
+            "session_id": "specific",
+            "task": "Specific task",
+            "git": {"modified_files": [], "staged_files": [], "untracked_files": []},
+        }
         (tmp_dirs / "sessions" / "specific.json").write_text(json.dumps(session))
 
         result = runner.invoke(cli, ["resume", "specific"])
@@ -202,8 +225,12 @@ class TestInject:
             "task": "Injected task",
             "timestamp": datetime.now().isoformat(),
             "working_directory": "/tmp",
-            "git": {"branch": "dev", "modified_files": ["app.py"],
-                    "staged_files": [], "untracked_files": []},
+            "git": {
+                "branch": "dev",
+                "modified_files": ["app.py"],
+                "staged_files": [],
+                "untracked_files": [],
+            },
             "decisions": ["Use FastAPI"],
             "status": "WIP",
         }
@@ -227,8 +254,12 @@ class TestScore:
             "task": "Score me",
             "timestamp": datetime.now().isoformat(),
             "working_directory": "/tmp",
-            "git": {"branch": "main", "modified_files": ["a.py"],
-                    "staged_files": [], "untracked_files": []},
+            "git": {
+                "branch": "main",
+                "modified_files": ["a.py"],
+                "staged_files": [],
+                "untracked_files": [],
+            },
             "decisions": ["Good choice"],
             "status": "Halfway done",
         }
@@ -286,8 +317,12 @@ class TestInstall:
             # Should not duplicate hooks
             pre_compact = settings["hooks"]["PreCompact"]
             hygiene_hooks = [
-                h for h in pre_compact
-                if any("hygiene" in inner.get("command", "") for inner in h.get("hooks", []))
+                h
+                for h in pre_compact
+                if any(
+                    "hygiene" in inner.get("command", "")
+                    for inner in h.get("hooks", [])
+                )
             ]
             assert len(hygiene_hooks) == 1
 
@@ -315,7 +350,9 @@ class TestList:
                 "timestamp": datetime.now().isoformat(),
                 "status": "In progress",
             }
-            (tmp_dirs / "sessions" / f"session-{i}.json").write_text(json.dumps(session))
+            (tmp_dirs / "sessions" / f"session-{i}.json").write_text(
+                json.dumps(session)
+            )
 
         result = runner.invoke(cli, ["list"])
         assert result.exit_code == 0
