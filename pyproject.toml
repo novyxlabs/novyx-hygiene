@@ -32,7 +32,7 @@ dependencies = [
 
 [project.optional-dependencies]
 novyx = ["novyx>=3.0.0"]
-dev = ["pytest>=7.0", "black", "ruff"]
+dev = ["pytest>=7.0", "black", "ruff==0.15.2", "mypy==1.19.1"]
 
 [project.scripts]
 hygiene = "novyx_hygiene.cli:main"
@@ -46,3 +46,16 @@ Issues = "https://github.com/novyxlabs/novyx-hygiene/issues"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["novyx_hygiene*"]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+
+[tool.mypy]
+python_version = "3.9"
+files = ["novyx_hygiene"]
+ignore_missing_imports = true
+warn_unused_ignores = true

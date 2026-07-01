@@ -11,10 +11,10 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 
 
-HOOK_EVENTS = {
+HOOK_EVENTS: Dict[str, List[Dict[str, Any]]] = {
     "PreCompact": [
         {
             "hooks": [
@@ -35,7 +35,7 @@ HOOK_EVENTS = {
                     "command": "hygiene inject",
                     "timeout": 5,
                 }
-            ]
+            ],
         },
         {
             "matcher": "clear",
@@ -45,7 +45,7 @@ HOOK_EVENTS = {
                     "command": "hygiene inject",
                     "timeout": 5,
                 }
-            ]
+            ],
         },
         {
             "matcher": "resume",
@@ -55,7 +55,7 @@ HOOK_EVENTS = {
                     "command": "hygiene inject",
                     "timeout": 5,
                 }
-            ]
+            ],
         },
     ],
 }
@@ -147,7 +147,8 @@ def uninstall_hooks(project_dir: Optional[str] = None, scope: str = "project") -
     for event in list(hooks.keys()):
         original_len = len(hooks[event])
         hooks[event] = [
-            h for h in hooks[event]
+            h
+            for h in hooks[event]
             if not any("hygiene" in inner.get("command", "") for inner in h.get("hooks", []))
         ]
         if len(hooks[event]) != original_len:

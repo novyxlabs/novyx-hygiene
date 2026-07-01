@@ -11,7 +11,7 @@ from typing import Dict, Any, List
 
 def get_git_context() -> Dict[str, Any]:
     """Capture rich git context for the current working directory."""
-    result = {
+    result: Dict[str, Any] = {
         "branch": None,
         "dirty": False,
         "modified_files": [],
@@ -25,32 +25,28 @@ def get_git_context() -> Dict[str, Any]:
 
     try:
         root = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, cwd=cwd
+            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, cwd=cwd
         )
         if root.returncode != 0:
             return result
         result["repo_root"] = root.stdout.strip()
 
         branch = subprocess.run(
-            ["git", "branch", "--show-current"],
-            capture_output=True, text=True, cwd=cwd
+            ["git", "branch", "--show-current"], capture_output=True, text=True, cwd=cwd
         )
         if branch.returncode == 0:
             result["branch"] = branch.stdout.strip()
 
         # Staged files
         staged = subprocess.run(
-            ["git", "diff", "--cached", "--name-only"],
-            capture_output=True, text=True, cwd=cwd
+            ["git", "diff", "--cached", "--name-only"], capture_output=True, text=True, cwd=cwd
         )
         if staged.returncode == 0 and staged.stdout.strip():
             result["staged_files"] = staged.stdout.strip().split("\n")[:20]
 
         # Modified (unstaged)
         modified = subprocess.run(
-            ["git", "diff", "--name-only"],
-            capture_output=True, text=True, cwd=cwd
+            ["git", "diff", "--name-only"], capture_output=True, text=True, cwd=cwd
         )
         if modified.returncode == 0 and modified.stdout.strip():
             result["modified_files"] = modified.stdout.strip().split("\n")[:20]
@@ -58,7 +54,9 @@ def get_git_context() -> Dict[str, Any]:
         # Untracked
         untracked = subprocess.run(
             ["git", "ls-files", "--others", "--exclude-standard"],
-            capture_output=True, text=True, cwd=cwd
+            capture_output=True,
+            text=True,
+            cwd=cwd,
         )
         if untracked.returncode == 0 and untracked.stdout.strip():
             result["untracked_files"] = untracked.stdout.strip().split("\n")[:20]
@@ -69,8 +67,7 @@ def get_git_context() -> Dict[str, Any]:
 
         # Recent commits
         log = subprocess.run(
-            ["git", "log", "--oneline", "-5"],
-            capture_output=True, text=True, cwd=cwd
+            ["git", "log", "--oneline", "-5"], capture_output=True, text=True, cwd=cwd
         )
         if log.returncode == 0 and log.stdout.strip():
             result["recent_commits"] = log.stdout.strip().split("\n")[:5]
@@ -119,9 +116,7 @@ def score_session(session: Dict[str, Any]) -> Dict[str, Any]:
     # File sprawl
     git = session.get("git", {})
     all_files = set(
-        git.get("modified_files", [])
-        + git.get("staged_files", [])
-        + git.get("untracked_files", [])
+        git.get("modified_files", []) + git.get("staged_files", []) + git.get("untracked_files", [])
     )
     if len(all_files) > 15:
         score -= 15
@@ -140,7 +135,9 @@ def score_session(session: Dict[str, Any]) -> Dict[str, Any]:
                 dirs.add(parts[0])
         if len(dirs) > 4:
             score -= 10
-            issues.append(f"Changes span {len(dirs)} top-level directories — possible mixed concerns")
+            issues.append(
+                f"Changes span {len(dirs)} top-level directories — possible mixed concerns"
+            )
             tips.append("Consider splitting into focused sessions")
 
     # Decision tracking
@@ -157,7 +154,17 @@ def score_session(session: Dict[str, Any]) -> Dict[str, Any]:
 
     score = max(0, min(100, score))
 
-    grade = "A" if score >= 90 else "B" if score >= 75 else "C" if score >= 60 else "D" if score >= 40 else "F"
+    grade = (
+        "A"
+        if score >= 90
+        else "B"
+        if score >= 75
+        else "C"
+        if score >= 60
+        else "D"
+        if score >= 40
+        else "F"
+    )
 
     return {
         "score": score,

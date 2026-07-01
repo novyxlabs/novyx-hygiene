@@ -10,6 +10,7 @@ from typing import Optional, Dict, Any, List
 # Try to import novyx for cloud mode
 try:
     from novyx import Novyx
+
     NOVYX_AVAILABLE = True
 except ImportError:
     NOVYX_AVAILABLE = False
@@ -137,7 +138,9 @@ def list_sessions(limit: int = 10) -> List[Dict[str, Any]]:
 
     if not sessions:
         if SESSIONS_DIR.exists():
-            files = sorted(SESSIONS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+            files = sorted(
+                SESSIONS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
+            )
             for f in files[:limit]:
                 try:
                     with open(f) as fp:
